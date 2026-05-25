@@ -4,9 +4,13 @@ export function getFeedbacks() {
 	const feedbacks = {}
 
 	const ColorGreen = combineRgb(0, 200, 0)
+	const ColorCyan = combineRgb(0, 255, 255) // #00ffff — default bg for toggle-status feedbacks
+	const ColorBlack = combineRgb(0, 0, 0)
 	const ColorOrange = combineRgb(255, 102, 0)
 	const MittiBlue = combineRgb(73, 165, 231)
 	const MittiGray = combineRgb(77, 77, 77)
+
+	const cueToolTip = 'You can also use "current", "selected", "previous", "next" or "all"'
 
 	feedbacks['playStatus'] = {
 		type: 'boolean',
@@ -110,8 +114,9 @@ export function getFeedbacks() {
 				type: 'textinput',
 				useVariables: true,
 				label: 'Cue ID',
+				tooltip: cueToolTip,
 				id: 'cueID',
-				default: '',
+				default: 'current',
 			},
 		],
 		callback: async (feedback, context) => {
@@ -132,8 +137,9 @@ export function getFeedbacks() {
 				type: 'textinput',
 				useVariables: true,
 				label: 'Cue ID',
+				tooltip: cueToolTip,
 				id: 'cueID',
-				default: '',
+				default: 'current',
 			},
 		],
 		callback: async (feedback, context) => {
@@ -154,8 +160,9 @@ export function getFeedbacks() {
 				type: 'textinput',
 				useVariables: true,
 				label: 'Cue ID',
+				tooltip: cueToolTip,
 				id: 'cueID',
-				default: '',
+				default: 'current',
 			},
 		],
 		callback: async (feedback, context) => {
@@ -169,15 +176,16 @@ export function getFeedbacks() {
 		name: 'Cue ID - Audio Enabled',
 		description: 'Change style if audio is enabled on a cue',
 		defaultStyle: {
-			bgcolor: ColorGreen,
+			bgcolor: ColorCyan,
 		},
 		options: [
 			{
 				type: 'textinput',
 				useVariables: true,
 				label: 'Cue ID',
+				tooltip: cueToolTip,
 				id: 'cueID',
-				default: '',
+				default: 'current',
 			},
 		],
 		callback: async (feedback, context) => {
@@ -191,15 +199,16 @@ export function getFeedbacks() {
 		name: 'Cue ID - Pause At Beginning Enabled',
 		description: 'Change style if pause at beginning is enabled on a cue',
 		defaultStyle: {
-			bgcolor: ColorGreen,
+			bgcolor: ColorCyan,
 		},
 		options: [
 			{
 				type: 'textinput',
 				useVariables: true,
 				label: 'Cue ID',
+				tooltip: cueToolTip,
 				id: 'cueID',
-				default: '',
+				default: 'current',
 			},
 		],
 		callback: async (feedback, context) => {
@@ -213,15 +222,16 @@ export function getFeedbacks() {
 		name: 'Cue ID - Pause At End Enabled',
 		description: 'Change style if pause at end is enabled on a cue',
 		defaultStyle: {
-			bgcolor: ColorGreen,
+			bgcolor: ColorCyan,
 		},
 		options: [
 			{
 				type: 'textinput',
 				useVariables: true,
 				label: 'Cue ID',
+				tooltip: cueToolTip,
 				id: 'cueID',
-				default: '',
+				default: 'current',
 			},
 		],
 		callback: async (feedback, context) => {
@@ -235,15 +245,16 @@ export function getFeedbacks() {
 		name: 'Cue ID - Fade In Enabled',
 		description: 'Change style if fade in is enabled on a cue',
 		defaultStyle: {
-			bgcolor: ColorGreen,
+			bgcolor: ColorCyan,
 		},
 		options: [
 			{
 				type: 'textinput',
 				useVariables: true,
 				label: 'Cue ID',
+				tooltip: cueToolTip,
 				id: 'cueID',
-				default: '',
+				default: 'current',
 			},
 		],
 		callback: async (feedback, context) => {
@@ -257,15 +268,16 @@ export function getFeedbacks() {
 		name: 'Cue ID - Fade Out Enabled',
 		description: 'Change style if fade out is enabled on a cue',
 		defaultStyle: {
-			bgcolor: ColorGreen,
+			bgcolor: ColorCyan,
 		},
 		options: [
 			{
 				type: 'textinput',
 				useVariables: true,
 				label: 'Cue ID',
+				tooltip: cueToolTip,
 				id: 'cueID',
-				default: '',
+				default: 'current',
 			},
 		],
 		callback: async (feedback, context) => {
@@ -279,15 +291,16 @@ export function getFeedbacks() {
 		name: 'Cue ID - Loop Enabled',
 		description: 'Change style if loop is enabled on a cue',
 		defaultStyle: {
-			bgcolor: ColorGreen,
+			bgcolor: ColorCyan,
 		},
 		options: [
 			{
 				type: 'textinput',
 				useVariables: true,
 				label: 'Cue ID',
+				tooltip: cueToolTip,
 				id: 'cueID',
-				default: '',
+				default: 'current',
 			},
 		],
 		callback: async (feedback, context) => {
@@ -301,15 +314,16 @@ export function getFeedbacks() {
 		name: 'Cue ID - Transition Enabled',
 		description: 'Change style if transition is enabled on a cue',
 		defaultStyle: {
-			bgcolor: ColorGreen,
+			bgcolor: ColorCyan,
 		},
 		options: [
 			{
 				type: 'textinput',
 				useVariables: true,
 				label: 'Cue ID',
+				tooltip: cueToolTip,
 				id: 'cueID',
-				default: '',
+				default: 'current',
 			},
 		],
 		callback: async (feedback, context) => {
@@ -323,15 +337,16 @@ export function getFeedbacks() {
 		name: 'Cue ID - Goto Enabled',
 		description: 'Change style if goto is enabled on a cue',
 		defaultStyle: {
-			bgcolor: ColorGreen,
+			bgcolor: ColorCyan,
 		},
 		options: [
 			{
 				type: 'textinput',
 				useVariables: true,
 				label: 'Cue ID',
+				tooltip: cueToolTip,
 				id: 'cueID',
-				default: '',
+				default: 'current',
 			},
 		],
 		callback: async (feedback, context) => {
@@ -358,6 +373,34 @@ export function getFeedbacks() {
 		],
 		callback: (feedback) => {
 			return this.states.timeRemaining <= feedback.options.time
+		},
+	}
+
+	feedbacks['atOutPoint'] = {
+		type: 'boolean',
+		name: 'Playhead at Out Point',
+		description: 'Activates when the playhead is precisely at the cue out point (time remaining is 0).',
+		defaultStyle: {
+			bgcolor: ColorCyan,
+			color: ColorBlack,
+		},
+		options: [],
+		callback: () => {
+			return !!this.states.atOutPoint
+		},
+	}
+
+	feedbacks['atInPoint'] = {
+		type: 'boolean',
+		name: 'Playhead at In Point',
+		description: 'Activates when the playhead is precisely at the cue in point (time elapsed is 0).',
+		defaultStyle: {
+			bgcolor: ColorCyan,
+			color: ColorBlack,
+		},
+		options: [],
+		callback: () => {
+			return !!this.states.atInPoint
 		},
 	}
 

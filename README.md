@@ -8,6 +8,26 @@ See [HELP.md](./companion/HELP.md) and [LICENSE](./LICENSE)
 
 ## Changelog
 
+### v3.11.0
+
+- New
+  - Name-keyed cue cache populates as cues play, so the selected and next cues can display their TRT, loop, pause-at-end, and audio state on buttons even when not currently playing.
+  - 16 new variables: `selectedCueTRT` (+ `_hhmmss`), `selectedCueLoop`, `selectedCuePauseAtEnd`, `selectedCueAudio` and the parallel `nextCue*` set; `prevSelectedCueName` / `nextSelectedCueName` (cues either side of the selection cursor); `cueTimeLeft_hhmmssff` and `cueTimeElapsed_hhmmssff` (significant-digits time with frame precision, minimum `SS:FF`).
+  - Two new feedbacks: `Playhead at In Point` and `Playhead at Out Point`. Default style: cyan background, black text. Fires when the playhead is precisely at the cue's in or out point.
+  - New "Cue In/Out" preset category with two rotary-knob trim presets: rotate to scrub the playhead by 1 frame, tap to jump to the cue in/out point, hold for 1 s+ to set the in/out point from the playhead (continues while held so you can scrub-while-trimming).
+  - Toggle presets under "Cue Playback Options" now ship with their matching cue-state feedback pre-wired (cyan default style), so they reflect the current cue's state visually.
+  - Icon-style mirror presets for the cue toggles under a new "Cue Playback Options - Icons" sub-header (PNG button icons + inactive-state gray bg).
+  - Select Previous / Select Next presets now display the cue name that would become selected if pressed, instead of static labels.
+  - Cue-state feedbacks (Loop / Pause At Begin/End / Fade In/Out / Audio / Transition / Goto) accept `"current"`, `"selected"`, `"previous"`, `"next"`, `"all"` magic-keyword shortcuts in their `cueID` option (matching the actions). Default cueID changed from empty to `"current"`. Tooltip on the cueID inputs lists the magic keywords.
+  - All preset resting backgrounds set to a uniform brand color (`#003852`). State-indicator feedback colors (active green, countdown red/black flash, etc.) preserved.
+- Fix
+  - `currentCueLoop` / `currentCuePauseAtEnd` / `currentCueAudio` variables now reflect the correct state for cues with a custom ID. Mitti routes those toggle broadcasts under the custom-ID path, not the current-cue path, so the previous logic went stale on every transition to/from a custom-ID cue.
+  - Per-cue path-prefixed actions (Select Cue, Jump To Cue, audio/fade/loop/etc.) now work for cues with a custom ID. Passing a position number (e.g. `4` for a cue whose custom ID is `FLAG`) used to silently no-op; the module now detects the position↔custom-ID pair from broadcast feedback and substitutes the custom ID before sending.
+  - `cue_<customID>_cueName` variables (e.g. `cue_FLAG_cueName`) now populate correctly. Mitti broadcasts `cueName` only under the position-number path; the module mirrors it to the alias variable.
+  - Cue cache writes no longer corrupt a sibling cue's entry during transitions. Mitti's broadcast burst on a cue change frequently delivers the new cue's data before the new `currentCueID` arrives; cache writes are debounced ~50 ms so the cue identity is settled by the time we write.
+  - `Play Cue by ID` / `Select Cue by ID` preset generation no longer includes spurious entries for Mitti's navigation refs (`current` / `previous` / `next`).
+  - Resync request (`resendOSCFeedback`) fires on every play-start (debounced 250 ms) so the current cue's name updates reliably after ±1 cue navigations.
+
 ### v3.10.2
 
 - Fix

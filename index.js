@@ -17,6 +17,8 @@ class MittiInstance extends InstanceBase {
 		this.config = config
 
 		this.cues = {}
+		this.cueOrder = []
+		this.cueCache = {}
 		this.states = {}
 
 		this.connection = {
@@ -116,7 +118,23 @@ class MittiInstance extends InstanceBase {
 		this.stopTestService()
 		this.stopBonjourService()
 
+		if (this._cacheRefreshTimer) {
+			clearTimeout(this._cacheRefreshTimer)
+			this._cacheRefreshTimer = null
+		}
+
 		this.cues = {}
+	}
+
+	// Ask Mitti to re-broadcast its full feedback state. Mitti sometimes lags
+	// the currentCueName update on small navigation jumps (±1 clip), so when
+	// playback transitions to Playing we force a refresh to avoid showing a
+	// stale clip name. Debounced so rapid play/stop cycling can't flood Mitti.
+	_requestResyncFromMitti() {
+		const now = Date.now()
+		if (this._lastResyncAt && now - this._lastResyncAt < 250) return
+		this._lastResyncAt = now
+		this.sendCommand('resendOSCFeedback')
 	}
 
 	initVariables() {
@@ -172,14 +190,242 @@ class MittiInstance extends InstanceBase {
 	async conformCueID(context, cueID) {
 		let cue = await context.parseVariablesInString(cueID)
 
-		if (!cue?.match(/^(current|selected|previous|next|all)$/)) {
-			cue = cue.toUpperCase().slice(0, 6)
+		if (cue?.match(/^(current|selected|previous|next|all)$/)) {
+			// Resolve "current" / "selected" to the concrete cue ID so feedbacks
+			// that read `this.cues[id].<param>` actually find data. Mitti
+			// broadcasts most per-cue toggle state under /mitti/<realID>/<param>
+			// rather than under /mitti/current/<param>, so the alias cache misses
+			// those. Actions still work — Mitti accepts both /mitti/current/<cmd>
+			// and /mitti/<id>/<cmd> inbound. Leave "previous"/"next"/"all" as
+			// the keyword: "all" is multi-cue by design, and previous/next have
+			// no corresponding currentCueID-style state we can read here.
+			if (cue === 'current' && this.states.currentCueID && this.states.currentCueID !== '-') {
+				cue = this.states.currentCueID
+			} else if (cue === 'selected' && this.states.selectedCueID && this.states.selectedCueID !== '-') {
+				cue = this.states.selectedCueID
+			} else {
+				return cue
+			}
+			// fall through so a numeric position gets _pairedCueID treatment too
+		}
+
+		cue = cue.toUpperCase().slice(0, 6)
+
+		// For purely-numeric input, see if the cue at that position has a custom
+		// ID alias and substitute it. See _pairedCueID for why this is needed.
+		if (/^\d+$/.test(cue)) {
+			const alias = this._pairedCueID(cue)
+			if (alias) {
+				this.log('debug', `conformCueID: position ${cue} -> custom ID ${alias}`)
+				cue = alias
+			}
 		}
 		return cue
 	}
 
+	/**
+	 * Mitti splits broadcasts for cues with a custom ID across two cueOrder
+	 * entries: an "alias" entry (toggle states, no cueName) and a "position"
+	 * entry (cueName + numeric properties, no toggles), with the alias
+	 * broadcast immediately before its position counterpart. Inbound commands
+	 * always go through the custom ID once set, so `/mitti/4/select` fails for
+	 * a cue with custom ID "FLAG".
+	 *
+	 * Given either half of a pair, return the other half's identifier — or
+	 * null if `id` is a regular (un-custom-ID'd) cue or not part of a pair.
+	 */
+	_pairedCueID(id) {
+		const idx = this.cueOrder.indexOf(id)
+		if (idx < 0) return null
+		const entry = this.cues[id]
+		if (!entry) return null
+
+		const isAlias = entry.cueName === undefined && entry.toggleAudio !== undefined
+		const isPosition = entry.cueName !== undefined && entry.toggleAudio === undefined
+
+		if (isAlias && idx + 1 < this.cueOrder.length) {
+			const candidate = this.cueOrder[idx + 1]
+			const c = this.cues[candidate]
+			if (c && c.cueName !== undefined && c.toggleAudio === undefined) return candidate
+		} else if (isPosition && idx > 0) {
+			const candidate = this.cueOrder[idx - 1]
+			const c = this.cues[candidate]
+			if (c && c.cueName === undefined && c.toggleAudio !== undefined) return candidate
+		}
+		return null
+	}
+
+	/**
+	 * Resolve a cue identifier to its playlist position number, or null if it
+	 * isn't a position-keyed entry. Mitti broadcasts `cueName` under the
+	 * position-number path even for custom-ID cues, so `this.cues["4"]` (with
+	 * cueName set) is position 4 regardless of any custom ID alias. A custom
+	 * ID like "FLAG" resolves to its paired position via `_pairedCueID`.
+	 */
+	_positionForCueID(id) {
+		if (!id || id === '-') return null
+		if (/^\d+$/.test(id) && this.cues[id]?.cueName !== undefined) {
+			return parseInt(id, 10)
+		}
+		const paired = this._pairedCueID(id)
+		if (paired && /^\d+$/.test(paired)) return parseInt(paired, 10)
+		return null
+	}
+
+	/**
+	 * Refresh `prevSelectedCueName` / `nextSelectedCueName` from the current
+	 * `selectedCueID`. Powers the Select Previous / Select Next presets, which
+	 * need names relative to the selection cursor — distinct from Mitti's
+	 * top-level `previousCueName` / `nextCueName` (those follow the playback
+	 * cursor and don't shift when the user arrows through the playlist).
+	 */
+	_refreshSelectedNavCues() {
+		const pos = this._positionForCueID(this.states.selectedCueID)
+		const prev = pos !== null ? this.cues[String(pos - 1)]?.cueName : null
+		const next = pos !== null ? this.cues[String(pos + 1)]?.cueName : null
+		this.setVariableValues({
+			prevSelectedCueName: prev ?? 'None',
+			nextSelectedCueName: next ?? 'None',
+		})
+	}
+
+	/**
+	 * Derive the cueName of the currently-playing cue from `currentCueID`, NOT
+	 * from `states.currentCueName`. During cue transitions Mitti broadcasts
+	 * /mitti/currentCueID before /mitti/currentCueName, so the latter is stale
+	 * (still the previous cue) when we want to cache the new cue's attributes.
+	 * The per-cue path `this.cues[id].cueName` reflects the cue identified by
+	 * `currentCueID` accurately. For split (custom-ID) cues, the alias entry
+	 * has no cueName — fall back to the paired position entry. Returns null
+	 * when we can't determine the name yet (skip the write rather than risk
+	 * corrupting a sibling cue's cache entry).
+	 */
+	_currentCueName() {
+		const id = this.states.currentCueID
+		if (!id || id === '-') return null
+		if (this.cues[id]?.cueName !== undefined) return this.cues[id].cueName
+		const paired = this._pairedCueID(id)
+		if (paired && this.cues[paired]?.cueName !== undefined) return this.cues[paired].cueName
+		return null
+	}
+
+	/**
+	 * Cache attributes against the currently-playing cue's name so we can look
+	 * them up later when that name reappears as `selectedCueName` or
+	 * `nextCueName`. Mitti only broadcasts TRT / loop / pauseAtEnd for the
+	 * playing cue, never for the next/selected one — observing during play is
+	 * the only path.
+	 *
+	 * Writes are debounced because Mitti's transition broadcasts arrive in an
+	 * order we can't rely on — /mitti/currentCueTRT and /mitti/current/toggleX
+	 * frequently arrive BEFORE /mitti/currentCueID updates, so resolving the
+	 * cue name synchronously at write time would land the new cue's data in
+	 * the previous cue's entry. Stashing attrs and flushing ~50 ms later gives
+	 * the broadcast burst time to settle and `_currentCueName()` to resolve
+	 * against the correct (new) `currentCueID`.
+	 */
+	_cacheCurrentCueAttributes(attrs) {
+		if (!this._pendingCacheAttrs) this._pendingCacheAttrs = {}
+		Object.assign(this._pendingCacheAttrs, attrs)
+		if (this._cacheRefreshTimer) clearTimeout(this._cacheRefreshTimer)
+		this._cacheRefreshTimer = setTimeout(() => this._flushPendingCache(), 50)
+	}
+
+	_flushPendingCache() {
+		this._cacheRefreshTimer = null
+		if (!this._pendingCacheAttrs || Object.keys(this._pendingCacheAttrs).length === 0) return
+		const name = this._currentCueName()
+		if (!name || name === '-') {
+			// currentCueID-derived name still not available — retry a few times
+			// to handle the case where currentCueID arrives well after the data.
+			if (this._cacheRefreshRetries == null) this._cacheRefreshRetries = 0
+			if (this._cacheRefreshRetries < 5) {
+				this._cacheRefreshRetries++
+				this._cacheRefreshTimer = setTimeout(() => this._flushPendingCache(), 50)
+				return
+			}
+			// Give up; drop the pending attrs rather than guess.
+			this._cacheRefreshRetries = 0
+			this._pendingCacheAttrs = null
+			return
+		}
+		this._cacheRefreshRetries = 0
+		if (!this.cueCache[name]) this.cueCache[name] = {}
+		Object.assign(this.cueCache[name], this._pendingCacheAttrs)
+		this._pendingCacheAttrs = null
+		this._refreshOnDeckFromCache()
+	}
+
+	/**
+	 * Re-derive `currentCueLoop` / `currentCuePauseAtEnd` (and mirror into the
+	 * on-deck cache) from the **per-cue** cache `this.cues[currentCueID]`,
+	 * which is the trustworthy source for custom-ID cues. Mitti's
+	 * `/mitti/current/toggleX` broadcasts are unreliable for split cues —
+	 * they may not fire at all on cue change, or may carry the previous cue's
+	 * stale state. The per-cue path always reflects reality.
+	 */
+	_refreshCurrentToggleStates() {
+		const id = this.states.currentCueID
+		if (!id || id === '-') return
+		const lookup = (param) => {
+			if (this.cues[id] && typeof this.cues[id][param] !== 'undefined') return this.cues[id][param]
+			const paired = this._pairedCueID(id)
+			return paired ? this.cues[paired]?.[param] : undefined
+		}
+		const updates = {}
+		const cacheUpdates = {}
+		const loop = lookup('toggleLoop')
+		if (typeof loop !== 'undefined') {
+			const on = loop > 0
+			updates.currentCueLoop = on ? 'On' : 'Off'
+			cacheUpdates.loop = on
+		}
+		const pe = lookup('togglePauseAtEnd')
+		if (typeof pe !== 'undefined') {
+			const on = pe > 0
+			updates.currentCuePauseAtEnd = on ? 'On' : 'Off'
+			cacheUpdates.pauseAtEnd = on
+		}
+		const audio = lookup('toggleAudio')
+		if (typeof audio !== 'undefined') {
+			const on = audio > 0
+			updates.currentCueAudio = on ? 'Unmuted' : 'Muted'
+			cacheUpdates.audio = on
+		}
+		if (Object.keys(updates).length > 0) this.setVariableValues(updates)
+		if (Object.keys(cacheUpdates).length > 0) this._cacheCurrentCueAttributes(cacheUpdates)
+	}
+
+	/**
+	 * Re-derive `selectedCue*` and `nextCue*` variables from `cueCache` and
+	 * push a fresh display state. Called when the cache changes or when
+	 * `selectedCueName` / `nextCueName` change. Variables show `'None'` when
+	 * no entry is cached yet (cold-start until the cue has played once).
+	 */
+	_refreshOnDeckFromCache() {
+		const fmtFlag = (v) => (v == null ? 'None' : v ? 'On' : 'Off')
+		const fmtAudio = (v) => (v == null ? 'None' : v ? 'Unmuted' : 'Muted')
+		const lookup = (name) => (!name || name === '-' ? null : (this.cueCache[name] ?? null))
+		const sel = lookup(this.states.selectedCueName)
+		const nxt = lookup(this.states.nextCueName)
+		this.setVariableValues({
+			selectedCueTRT: sel?.trtShort ?? 'None',
+			selectedCueTRT_hhmmss: sel?.trtFull ?? 'None',
+			selectedCueLoop: fmtFlag(sel?.loop),
+			selectedCuePauseAtEnd: fmtFlag(sel?.pauseAtEnd),
+			selectedCueAudio: fmtAudio(sel?.audio),
+			nextCueTRT: nxt?.trtShort ?? 'None',
+			nextCueTRT_hhmmss: nxt?.trtFull ?? 'None',
+			nextCueLoop: fmtFlag(nxt?.loop),
+			nextCuePauseAtEnd: fmtFlag(nxt?.pauseAtEnd),
+			nextCueAudio: fmtAudio(nxt?.audio),
+		})
+	}
+
 	async initOSC() {
 		this.cues = {}
+		this.cueOrder = []
+		this.cueCache = {}
 		this.states = {}
 
 		if (this.listener) {
@@ -375,76 +621,134 @@ class MittiInstance extends InstanceBase {
 
 	processListenerUpdate(address, value) {
 		switch (address) {
-			case 'currentCueName':
+			case 'currentCueName': {
+				const prevCueName = this.states.currentCueName
 				this.states.currentCueName = value
 				this.setVariableValues({ currentCueName: value != '-' ? value : 'None' })
 				this.checkFeedbacks('playingCueName', 'playingCueID', 'activeCueName')
+				if (prevCueName !== undefined && prevCueName !== value) {
+					// Cue changed — the old clip's elapsed/duration belong to a different clip now.
+					this.states.elapsedSec = 0
+					this.states.remainingSec = 0
+					this.states.durationSec = 0
+				}
 				break
+			}
 			case 'currentCueID':
 				this.states.currentCueID = value
 				this.setVariableValues({ currentCueID: value != '-' ? value : 'None' })
 				this.checkFeedbacks('playingCueName', 'playingCueID', 'activeCueID')
+				// Re-derive from the per-cue path — Mitti's /mitti/current/toggleX
+				// broadcasts go stale on transitions to/from custom-ID cues.
+				this._refreshCurrentToggleStates()
 				break
 			case 'previousCueName':
 				this.setVariableValues({ previousCueName: value != '-' ? value : 'None' })
 				break
 			case 'nextCueName':
+				this.states.nextCueName = value
 				this.setVariableValues({ nextCueName: value != '-' ? value : 'None' })
+				this._refreshOnDeckFromCache()
 				break
 			case 'selectedCueName':
 				this.states.selectedCueName = value
 				this.setVariableValues({ selectedCueName: value != '-' ? value : 'None' })
 				this.checkFeedbacks('selectedCueName')
+				this._refreshOnDeckFromCache()
 				break
 			case 'selectedCueID':
 				this.states.selectedCueID = value
 				this.setVariableValues({ selectedCueID: value != '-' ? value : 'None' })
 				this.checkFeedbacks('selectedCueID')
+				this._refreshSelectedNavCues()
 				break
 			case 'cueTimeLeft':
 				{
 					let cueTimeLeft = value
-					let cueTimeLeftSplit = cueTimeLeft.match(/^-(?<hh>\d\d):(?<mm>\d\d):(?<ss>\d\d)/i)
+					let cueTimeLeftSplit = cueTimeLeft.match(/^-(?<hh>\d\d):(?<mm>\d\d):(?<ss>\d\d)(?::(?<ff>\d\d))?/i)
 					if (cueTimeLeftSplit) {
 						let cueTimeLeftHH = cueTimeLeftSplit?.groups?.hh
 						let cueTimeLeftMM = cueTimeLeftSplit?.groups?.mm
 						let cueTimeLeftSS = cueTimeLeftSplit?.groups?.ss
+						let cueTimeLeftFF = cueTimeLeftSplit?.groups?.ff ?? '00'
 						let cueTimeLeftShort = `-${cueTimeLeftHH == '00' ? '' : cueTimeLeftHH + ':'}${cueTimeLeftMM}:${cueTimeLeftSS}`
 						let cueTimeLeftFull = `-${cueTimeLeftHH}:${cueTimeLeftMM}:${cueTimeLeftSS}`
+						// Drop leading zero segments; minimum is -SS:FF.
+						let cueTimeLeftHmsf
+						if (cueTimeLeftHH !== '00') {
+							cueTimeLeftHmsf = `-${cueTimeLeftHH}:${cueTimeLeftMM}:${cueTimeLeftSS}:${cueTimeLeftFF}`
+						} else if (cueTimeLeftMM !== '00') {
+							cueTimeLeftHmsf = `-${cueTimeLeftMM}:${cueTimeLeftSS}:${cueTimeLeftFF}`
+						} else {
+							cueTimeLeftHmsf = `-${cueTimeLeftSS}:${cueTimeLeftFF}`
+						}
 
 						this.setVariableValues({
 							cueTimeLeft: cueTimeLeftShort,
 							cueTimeLeft_hhmmss: cueTimeLeftFull,
+							cueTimeLeft_hhmmssff: cueTimeLeftHmsf,
 							cueTimeLeft_h: cueTimeLeftHH,
 							cueTimeLeft_m: cueTimeLeftMM,
 							cueTimeLeft_s: cueTimeLeftSS,
 						})
 						this.states.timeRemaining =
 							parseInt(cueTimeLeftHH) * 120 + parseInt(cueTimeLeftMM) * 60 + parseInt(cueTimeLeftSS)
+						this.states.remainingSec =
+							parseInt(cueTimeLeftHH) * 3600 + parseInt(cueTimeLeftMM) * 60 + parseInt(cueTimeLeftSS)
 						this.checkFeedbacks('timeRemaining')
+
+						const atOutPoint =
+							cueTimeLeftHH === '00' && cueTimeLeftMM === '00' && cueTimeLeftSS === '00' && cueTimeLeftFF === '00'
+						if (this.states.atOutPoint !== atOutPoint) {
+							this.states.atOutPoint = atOutPoint
+							this.checkFeedbacks('atOutPoint')
+						}
 					}
 				}
 				break
 			case 'cueTimeElapsed':
 				{
 					let cueTimeElapsed = value
-					let cueTimeElapsedSplit = cueTimeElapsed.match(/^(?<hh>\d\d):(?<mm>\d\d):(?<ss>\d\d)/i)
+					let cueTimeElapsedSplit = cueTimeElapsed.match(/^(?<hh>\d\d):(?<mm>\d\d):(?<ss>\d\d)(?::(?<ff>\d\d))?/i)
 					if (cueTimeElapsedSplit) {
 						let cueTimeElapsedHH = cueTimeElapsedSplit?.groups?.hh
 						let cueTimeElapsedMM = cueTimeElapsedSplit?.groups?.mm
 						let cueTimeElapsedSS = cueTimeElapsedSplit?.groups?.ss
+						let cueTimeElapsedFF = cueTimeElapsedSplit?.groups?.ff ?? '00'
 						let cueTimeElapsedShort = `${
 							cueTimeElapsedHH == '00' ? '' : cueTimeElapsedMM + ':'
 						}${cueTimeElapsedMM}:${cueTimeElapsedSS}`
 						let cueTimeElapsedFull = `${cueTimeElapsedHH}:${cueTimeElapsedMM}:${cueTimeElapsedSS}`
+						// Drop leading zero segments; minimum is SS:FF.
+						let cueTimeElapsedHmsf
+						if (cueTimeElapsedHH !== '00') {
+							cueTimeElapsedHmsf = `${cueTimeElapsedHH}:${cueTimeElapsedMM}:${cueTimeElapsedSS}:${cueTimeElapsedFF}`
+						} else if (cueTimeElapsedMM !== '00') {
+							cueTimeElapsedHmsf = `${cueTimeElapsedMM}:${cueTimeElapsedSS}:${cueTimeElapsedFF}`
+						} else {
+							cueTimeElapsedHmsf = `${cueTimeElapsedSS}:${cueTimeElapsedFF}`
+						}
 
 						this.setVariableValues({
 							cueTimeElapsed: cueTimeElapsedShort,
 							cueTimeElapsed_hhmmss: cueTimeElapsedFull,
+							cueTimeElapsed_hhmmssff: cueTimeElapsedHmsf,
 							cueTimeElapsed_h: cueTimeElapsedHH,
 							cueTimeElapsed_m: cueTimeElapsedMM,
 							cueTimeElapsed_s: cueTimeElapsedSS,
 						})
+						this.states.elapsedSec =
+							parseInt(cueTimeElapsedHH) * 3600 + parseInt(cueTimeElapsedMM) * 60 + parseInt(cueTimeElapsedSS)
+
+						const atInPoint =
+							cueTimeElapsedHH === '00' &&
+							cueTimeElapsedMM === '00' &&
+							cueTimeElapsedSS === '00' &&
+							cueTimeElapsedFF === '00'
+						if (this.states.atInPoint !== atInPoint) {
+							this.states.atInPoint = atInPoint
+							this.checkFeedbacks('atInPoint')
+						}
 					}
 				}
 				break
@@ -466,6 +770,12 @@ class MittiInstance extends InstanceBase {
 							currentCueTRT_m: cueTimeMM,
 							currentCueTRT_s: cueTimeSS,
 						})
+						this.states.durationSec = parseInt(cueTimeHH) * 3600 + parseInt(cueTimeMM) * 60 + parseInt(cueTimeSS)
+						this._cacheCurrentCueAttributes({
+							trtShort: cueTimeShort,
+							trtFull: cueTimeFull,
+							trtSec: this.states.durationSec,
+						})
 					}
 				}
 				break
@@ -474,11 +784,16 @@ class MittiInstance extends InstanceBase {
 				this.setVariableValues({ currentCueName: value != '-' ? value : 'None' })
 				this.checkFeedbacks('playingCueName', 'playingCueID', 'activeCueName')
 				break
-			case 'togglePlay':
+			case 'togglePlay': {
+				const wasPlaying = this.states.playing === 'Playing'
 				this.states.playing = value === 0 ? 'Paused' : 'Playing'
 				this.setVariableValues({ playStatus: this.states.playing })
 				this.checkFeedbacks('playStatus', 'playingCueName', 'playingCueID')
+				if (this.states.playing === 'Playing' && !wasPlaying) {
+					this._requestResyncFromMitti()
+				}
 				break
+			}
 			case 'playhead':
 				this.states.playhead = value
 				break
@@ -514,6 +829,27 @@ class MittiInstance extends InstanceBase {
 				this.cues[cue] = {}
 			}
 			this.cues[cue][param] = value
+			// For split (custom-ID) cues, Mitti's /mitti/current/toggleX broadcast
+			// is unreliable — it may not fire on cue change, or may carry the
+			// previous cue's stale state. Skip the variable + cache update for
+			// these params; the per-cue path (handled in the cue=<id> branch
+			// below) is the trustworthy source and fires _refreshCurrentToggleStates.
+			if (
+				(param === 'toggleLoop' || param === 'togglePauseAtEnd' || param === 'toggleAudio') &&
+				this._pairedCueID(this.states.currentCueID) !== null
+			) {
+				return
+			}
+			// Mirror loop / pause-at-end / audio state into the name-keyed cache
+			// so we can show it for the selected / next cue later. Verified
+			// raw=1 means feature ON via debug logs.
+			if (param === 'toggleLoop') {
+				this._cacheCurrentCueAttributes({ loop: value > 0 })
+			} else if (param === 'togglePauseAtEnd') {
+				this._cacheCurrentCueAttributes({ pauseAtEnd: value > 0 })
+			} else if (param === 'toggleAudio') {
+				this._cacheCurrentCueAttributes({ audio: value > 0 })
+			}
 			if (param.match(/^toggle/)) {
 				if (param === 'Audio') {
 					value = value > 0 ? 'Unmuted' : 'Muted'
@@ -543,6 +879,14 @@ class MittiInstance extends InstanceBase {
 			}
 			this.cues[cue][param] = value
 		} else {
+			// Track playlist order by first-seen for every real cue identifier.
+			// On `resendOSCFeedback` Mitti broadcasts cues in playlist order, so
+			// `cueOrder[N-1]` gives the effective ID of the cue at position N.
+			// `conformCueID` uses this to translate a numeric input (e.g. "4")
+			// to the custom-ID-bearing path Mitti actually listens on.
+			if (cue != 0 && !this.cueOrder.includes(cue)) {
+				this.cueOrder.push(cue)
+			}
 			if (!this.cues[cue]?.cueName && cue != 0 && param === 'cueName') {
 				if (!this.cues[cue]) {
 					this.cues[cue] = {}
@@ -552,6 +896,8 @@ class MittiInstance extends InstanceBase {
 				this.initPresets()
 				this.setVariableValues({ [`cue_${cue}_cueName`]: value })
 			} else if (this.cues[cue] && cue != 0 && param === 'deleted') {
+				const idx = this.cueOrder.indexOf(cue)
+				if (idx !== -1) this.cueOrder.splice(idx, 1)
 				delete this.cues[cue]
 				this.initVariables()
 				this.initPresets()
@@ -561,10 +907,40 @@ class MittiInstance extends InstanceBase {
 				}
 				this.cues[cue][param] = value
 
+				// Per-cue toggle broadcasts for the currently-playing cue are the
+				// trustworthy source for `currentCueLoop` / `currentCuePauseAtEnd`
+				// / `currentCueAudio` and the on-deck cache — see
+				// _refreshCurrentToggleStates for why. Handles toggle changes made
+				// while a cue is playing; cue-transition changes are covered by
+				// the case 'currentCueID' refresh.
+				if (
+					cue === this.states.currentCueID &&
+					(param === 'toggleLoop' || param === 'togglePauseAtEnd' || param === 'toggleAudio')
+				) {
+					const on = value > 0
+					if (param === 'toggleLoop') {
+						this.setVariableValues({ currentCueLoop: on ? 'On' : 'Off' })
+						this._cacheCurrentCueAttributes({ loop: on })
+					} else if (param === 'togglePauseAtEnd') {
+						this.setVariableValues({ currentCuePauseAtEnd: on ? 'On' : 'Off' })
+						this._cacheCurrentCueAttributes({ pauseAtEnd: on })
+					} else {
+						this.setVariableValues({ currentCueAudio: on ? 'Unmuted' : 'Muted' })
+						this._cacheCurrentCueAttributes({ audio: on })
+					}
+				}
+
 				switch (param) {
-					case 'cueName':
+					case 'cueName': {
 						this.setVariableValues({ [`cue_${cue}_cueName`]: value })
+						// Mirror to the custom-ID alias so `cue_FLAG_cueName` and
+						// the position's `cue_4_cueName` stay in sync.
+						const alias = this._pairedCueID(cue)
+						if (alias) this.setVariableValues({ [`cue_${alias}_cueName`]: value })
+						// Renaming a cue may affect the displayed prev/next-of-selected names.
+						this._refreshSelectedNavCues()
 						break
+					}
 					case 'toggleAudio':
 						this.checkFeedbacks('cueAudioStatus')
 						break
