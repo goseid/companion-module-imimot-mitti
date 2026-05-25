@@ -27,6 +27,7 @@ All messages are JSON of the form `{ "type": ..., "data": ... }`.
   "type": "state",
   "data": {
     "playing": true,
+    "hasCue": true,
     "clipName": "Opening Reel",
     "elapsed": 12,
     "duration": 90,
@@ -35,9 +36,10 @@ All messages are JSON of the form `{ "type": ..., "data": ... }`.
 }
 ```
 
-- `playing` (boolean) — `true` only when Mitti is actively playing a clip. Transitions from `true` to `false` exactly once on stop/pause, so downstream consumers can use it as a clean edge to detect playback start/stop.
-- `clipName` (string | null) — name of the playing clip, or `null` when `playing` is `false`.
-- `elapsed`, `duration`, `remaining` (numbers, seconds) — playback timing. All `0` when `playing` is `false`.
+- `playing` (boolean) — `true` only when Mitti is actively playing a clip with a fresh advancing timer. Transitions from `true` to `false` exactly once on stop/pause, so downstream consumers can use it as a clean edge to detect playback start/stop.
+- `hasCue` (boolean, since v3.11.2) — `true` whenever a cue is loaded on Mitti's output, including pause-at-end and mid-clip pause. Use this (rather than `playing`) when deciding whether to show clip info vs an idle placeholder.
+- `clipName` (string | null) — name of the loaded clip, or `null` when `hasCue` is `false`.
+- `elapsed`, `duration`, `remaining` (numbers, seconds) — playback timing for the loaded clip. All `0` when `hasCue` is `false`.
 
 **Inbound (client → server):**
 
@@ -77,6 +79,9 @@ This branch adds the display server and HUD widget on top of v3.11.0. The featur
   - Module config shows a "Display Server URLs" field with clickable links for every reachable network address of the host.
 - Fix
   - `EADDRINUSE` on the display server port no longer crashes the module; the conflict is logged and OSC control continues unaffected.
+  - Display widget no longer shows "idle" when a clip is paused at its out point. New `hasCue` field in the WebSocket state controls the widget's playback-vs-idle gate based on whether a cue is loaded on Mitti's output, separate from the `playing` field's "actively playing with fresh timer" semantic.
+  - Display widget no longer flashes "idle" for a frame at loop boundaries. Removed the `elapsedSec > 0` gate from the `playing` calculation — the `elapsedFresh` check still catches stale-after-stop cases.
+  - Progress bar computes against `(duration - 1)` so it reaches full at the 1-second-remaining mark and stays full through `0:00`. Previously the bar could either fall short at `0:00` (sub-second / frame-level time the integer-second `elapsed` / `duration` can't see) or lunge the last second's worth all at once.
 
 ### v3.11.0
 

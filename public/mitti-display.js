@@ -382,7 +382,11 @@
 	MittiDisplay.prototype._updateDisplay = function (data) {
 		this.state = data
 
-		if (!data || !data.playing) {
+		// `hasCue` (v3.11.2+) is the gate for "show the cue vs show idle" —
+		// stays true when paused-at-end and across loop boundaries. Older
+		// states without the field fall back to `playing` for compatibility.
+		var hasCue = data && (data.hasCue != null ? data.hasCue : data.playing)
+		if (!hasCue) {
 			this.elements.playback.style.display = 'none'
 			this.elements.idle.style.display = ''
 		} else {
@@ -394,7 +398,19 @@
 
 			var duration = data.duration || 0
 			var elapsed = data.elapsed || 0
-			var progress = duration > 0 ? Math.max(0, Math.min(1, elapsed / duration)) : 0
+			// Compute progress against (duration - 1) so the bar reaches full
+			// at the 1-second-remaining mark and stays full through 0:00.
+			// `elapsed`/`duration` are integer-second values, so the last
+			// second of playback can carry sub-second / frame-level time the
+			// widget can't see. Without this, the bar would either fall short
+			// at 0:00 (truncated frames look like missing progress) or lunge
+			// the last second's worth all at once when remaining ticks to 0.
+			var progress = 0
+			if (duration > 1) {
+				progress = Math.max(0, Math.min(1, elapsed / (duration - 1)))
+			} else if (duration > 0) {
+				progress = Math.max(0, Math.min(1, elapsed / duration))
+			}
 			this.elements.progressBar.style.width = progress * 100 + '%'
 
 			this._updateCurrentExtras(data)

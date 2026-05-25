@@ -200,13 +200,24 @@ class MittiInstance extends InstanceBase {
 	}
 
 	_buildDisplayState() {
+		const cueName = this.states.currentCueName && this.states.currentCueName !== '-' ? this.states.currentCueName : null
 		const elapsedFresh = this.states.lastElapsedAt > 0 && Date.now() - this.states.lastElapsedAt < 1500
-		const playing =
-			this.states.playing === 'Playing' &&
-			this.states.currentCueName &&
-			this.states.currentCueName !== '-' &&
-			elapsedFresh &&
-			(this.states.elapsedSec ?? 0) > 0
+
+		// `playing` (documented in README): true only when Mitti is actively
+		// playing a clip with a fresh advancing timer. Preserves the clean
+		// edge-on-stop contract for external consumers.
+		// Note: the `elapsedSec > 0` gate was removed in v3.11.2 — it caused
+		// a brief idle flash at loop boundaries when elapsedSec resets to 0
+		// momentarily. `elapsedFresh` still catches stale-after-stop cases
+		// (the original v3.11.1 motivation for the gate).
+		const playing = !!cueName && this.states.playing === 'Playing' && elapsedFresh
+
+		// `hasCue` (new in v3.11.2): true whenever a cue is loaded on Mitti's
+		// output, including pause-at-end and mid-clip pause. Drives the
+		// display widget's playback-vs-idle gate so the widget keeps showing
+		// the cue when paused (the previous `playing` gate hid the widget
+		// when Mitti reported Paused, even at pause-at-end).
+		const hasCue = !!cueName
 
 		// Pull cached attributes for the cue at the given slot (selected / next).
 		// Returns nulls when no entry is cached yet (cold start) — the consumer
@@ -227,18 +238,17 @@ class MittiInstance extends InstanceBase {
 		const sel = onDeck(this.states.selectedCueName)
 		const nxt = onDeck(this.states.nextCueName)
 
-		// Current clip's toggle state — sourced from the same name-keyed cache
-		// since it gets populated for whatever cue is currently playing. Lets
-		// the display widget render matching loop / pause-end / audio icons
-		// next to the live countdown when we add that UI.
-		const cur = playing ? (this.cueCache[this.states.currentCueName] ?? null) : null
+		// Current clip's cached state — looked up by cueName regardless of
+		// `playing` so the widget renders the right icons during pause-at-end.
+		const cur = hasCue ? (this.cueCache[cueName] ?? null) : null
 
 		return {
-			playing: !!playing,
-			clipName: playing ? this.states.currentCueName : null,
-			elapsed: playing ? (this.states.elapsedSec ?? 0) : 0,
-			duration: playing ? (this.states.durationSec ?? 0) : 0,
-			remaining: playing ? (this.states.remainingSec ?? 0) : 0,
+			playing,
+			hasCue,
+			clipName: hasCue ? cueName : null,
+			elapsed: hasCue ? (this.states.elapsedSec ?? 0) : 0,
+			duration: hasCue ? (this.states.durationSec ?? 0) : 0,
+			remaining: hasCue ? (this.states.remainingSec ?? 0) : 0,
 			currentClipLoop: cur?.loop ?? null,
 			currentClipPauseAtEnd: cur?.pauseAtEnd ?? null,
 			currentClipAudio: cur?.audio ?? null,
