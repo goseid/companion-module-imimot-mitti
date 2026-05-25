@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<title>Mitti Display — Test</title>
+		<style>
+			html,
+			body {
+				margin: 0;
+				padding: 0;
+				background: #222;
+				color: #ccc;
+				font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+				min-height: 100vh;
+			}
+			.wrap {
+				max-width: 1200px;
+				margin: 0 auto;
+				padding: 2vw;
+				display: flex;
+				flex-direction: column;
+				gap: 1vw;
+			}
+			h1 {
+				font-size: 1.5em;
+				margin: 0;
+			}
+			.note {
+				font-size: 0.9em;
+				color: #888;
+			}
+			.slot {
+				width: 100%;
+				aspect-ratio: 16 / 9;
+				background: #000;
+			}
+			pre {
+				background: #111;
+				color: #ddd;
+				padding: 1em;
+				border-radius: 4px;
+				overflow: auto;
+				font-size: 0.85em;
+				white-space: pre-wrap;
+				word-break: break-all;
+			}
+		</style>
+	</head>
+	<body>
+		<div class="wrap">
+			<h1>Mitti Display — Test</h1>
+			<p class="note">
+				This page loads <code>/mitti-display.js</code> from this server and connects to <code>ws://</code> on the same
+				host. Trigger a clip in Mitti and the countdown + progress bar should update live.
+			</p>
+			<div id="mitti-slot" class="slot"></div>
+			<h2 style="font-size: 1em; margin: 1em 0 0">Latest WS message</h2>
+			<pre id="raw">(waiting for state…)</pre>
+		</div>
+
+		<script src="/mitti-display.js"></script>
+		<script>
+			var display = new MittiDisplay('#mitti-slot')
+
+			// Side debug socket to show the raw JSON for sanity-checking.
+			var raw = document.getElementById('raw')
+			var dbg = new WebSocket('ws://' + window.location.host)
+			dbg.onmessage = function (ev) {
+				try {
+					var msg = JSON.parse(ev.data)
+					raw.textContent = JSON.stringify(msg, null, 2)
+				} catch (e) {
+					raw.textContent = ev.data
+				}
+			}
+			dbg.onclose = function () {
+				raw.textContent += '\n(socket closed — reconnect in 2s on the display)'
+			}
+		</script>
+	</body>
+</html>

@@ -56,4 +56,19 @@ export default [
 
 		return changes
 	},
+	function v3_11_0(context, props) {
+		let changes = {
+			updatedConfig: null,
+			updatedActions: [],
+			updatedFeedbacks: [],
+		}
+		if (props.config) {
+			let config = props.config
+			if (config.displayPort === undefined || config.displayPort === null) {
+				config.displayPort = 4666
+				changes.updatedConfig = config
+			}
+		}
+		return changes
+	},
 ]

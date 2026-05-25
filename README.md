@@ -6,7 +6,77 @@ This module will allow you to control Mitti, a modern, feature-packed but easy-t
 
 See [HELP.md](./companion/HELP.md) and [LICENSE](./LICENSE)
 
+## Display Server
+
+In addition to controlling Mitti, this module runs a small HTTP + WebSocket server that exposes the current Mitti playback state to browser-based displays (e.g. [multiview-hud](https://github.com/)).
+
+- **Port:** configurable via the `Display Server Port` field in the module config. Default `4666`. The module config also lists the reachable URLs as clickable links.
+- **HUD page:** `http://<companion-host>:<displayPort>/` serves a full-screen HUD — a time-of-day clock above the Mitti playback countdown.
+- **Debug page:** `http://<companion-host>:<displayPort>/debug.html` serves a bare test page (the `MittiDisplay` widget plus the raw WebSocket JSON) for verifying the feed.
+- **Assets:** `/mitti-display.js` (the self-contained `MittiDisplay` component), `/tod-clock.js` (the `TODClock` component) and `/fonts/Lekton-Bold.ttf` are all served over HTTP.
+- **WebSocket:** connect to `ws://<companion-host>:<displayPort>/`. On connection the server immediately sends the cached state; thereafter it pushes a new message whenever the state changes.
+
+### Message shape
+
+All messages are JSON of the form `{ "type": ..., "data": ... }`.
+
+**Outbound (server → client):**
+
+```json
+{
+  "type": "state",
+  "data": {
+    "playing": true,
+    "clipName": "Opening Reel",
+    "elapsed": 12,
+    "duration": 90,
+    "remaining": 78
+  }
+}
+```
+
+- `playing` (boolean) — `true` only when Mitti is actively playing a clip. Transitions from `true` to `false` exactly once on stop/pause, so downstream consumers can use it as a clean edge to detect playback start/stop.
+- `clipName` (string | null) — name of the playing clip, or `null` when `playing` is `false`.
+- `elapsed`, `duration`, `remaining` (numbers, seconds) — playback timing. All `0` when `playing` is `false`.
+
+**Inbound (client → server):**
+
+```json
+{ "type": "get_state" }
+```
+
+The server replies with the latest cached state to only that client.
+
+### Embedding the display
+
+```html
+<div id="mitti-slot" style="width:480px;height:270px"></div>
+<script src="http://companion-host:4666/mitti-display.js"></script>
+<script>
+  const display = new MittiDisplay('#mitti-slot', { wsUrl: 'ws://companion-host:4666' })
+</script>
+```
+
+`MittiDisplay` is dual-exported (CommonJS `module.exports.MittiDisplay` and browser `window.MittiDisplay`). It container-queries to fill its parent, references `font-family: 'Lekton-Bold'`, auto-reconnects after 2 seconds on WS close, and exposes `destroy()` to clean up. When embedding outside the bundled HUD page, the parent page is expected to provide the `Lekton-Bold` face (the server hosts it at `/fonts/Lekton-Bold.ttf`); the bundled HUD page loads it via `tod-clock.js`.
+
 ## Changelog
+
+### v3.11.1
+
+This branch adds the display server and HUD widget on top of v3.11.0. The features from v3.11.0 (cue caching, custom-ID routing fixes, in/out trim presets, etc.) are all included.
+
+- New
+  - HTTP + WebSocket display server (default port 4666, configurable via `Display Server Port`). Serves a self-contained browser display component (`mitti-display.js`) and pushes live playback state to subscribers. Useful for embedding the Mitti countdown / "on deck" info in browser-based multiview dashboards.
+  - HUD page at `/`: full-screen layout with a time-of-day clock above the Mitti countdown widget. Bare debug/test page at `/debug.html`.
+  - Display widget renders:
+    - Currently-playing clip name + countdown + progress bar
+    - Current cue TRT (lower-right) in the same blue as the elapsed-portion of the progress bar
+    - Current cue state icons (audio / loop / pause-at-end) in the upper-right, in the same red as the countdown
+    - "On deck" line below the playback area with the selected cue's name, TRT, audio icon, and loop/pause-at-end icon (all in green to follow the broadcast preview convention). Visible during both playing and idle states.
+  - Server also hosts `/tod-clock.js` (clock component) and `/fonts/Lekton-Bold.ttf` (font for the digital clock and countdown).
+  - Module config shows a "Display Server URLs" field with clickable links for every reachable network address of the host.
+- Fix
+  - `EADDRINUSE` on the display server port no longer crashes the module; the conflict is logged and OSC control continues unaffected.
 
 ### v3.11.0
 

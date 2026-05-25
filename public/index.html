@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Mitti HUD</title>
+		<style>
+			/*
+			 * --mitti-aspect: width/height ratio used to size the countdown widget
+			 * in the bottom half. The MittiDisplay content sums to ~29cqi tall, so
+			 * any aspect at or below ~3.4 keeps the clip name, countdown and
+			 * progress bar from clipping. 25/10 matches the arena-hud HUD feel.
+			 */
+			:root {
+				--mitti-aspect: 25 / 10;
+			}
+			* {
+				margin: 0;
+				padding: 0;
+				box-sizing: border-box;
+			}
+			html,
+			body {
+				width: 100vw;
+				height: 100vh;
+				background: #222;
+				overflow: hidden;
+				font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+			}
+			.layout {
+				width: 100%;
+				height: 100%;
+				display: flex;
+				flex-direction: column;
+			}
+			.half {
+				flex: 1 1 50%;
+				min-height: 0;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				overflow: hidden;
+			}
+			.bottom-half {
+				padding: 5px 0;
+			}
+			.clock-sizer {
+				height: 100%;
+				aspect-ratio: 1220 / 480;
+				max-width: 100%;
+			}
+			.clock-sizer > div {
+				width: 100%;
+				height: 100%;
+			}
+			.mitti-sizer {
+				height: 100%;
+				aspect-ratio: var(--mitti-aspect);
+				max-width: 100%;
+			}
+			.mitti-sizer > div {
+				width: 100%;
+				height: 100%;
+			}
+		</style>
+	</head>
+	<body>
+		<div class="layout">
+			<div class="half top-half">
+				<div class="clock-sizer"><div id="clock"></div></div>
+			</div>
+			<div class="half bottom-half">
+				<div class="mitti-sizer"><div id="mitti"></div></div>
+			</div>
+		</div>
+
+		<script src="/tod-clock.js"></script>
+		<script src="/mitti-display.js"></script>
+		<script>
+			;(function () {
+				// TODClock injects the Lekton-Bold @font-face from /fonts/; the
+				// MittiDisplay countdown picks up the same family on this page.
+				new TODClock('#clock', { backgroundColor: '#222', color: '#fff' })
+				new MittiDisplay('#mitti')
+			})()
+		</script>
+	</body>
+</html>

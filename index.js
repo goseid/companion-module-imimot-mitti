@@ -5,8 +5,10 @@ import { getVariables } from './variables.js'
 import { getFeedbacks } from './feedbacks.js'
 import UpgradeScripts from './upgrades.js'
 
+import os from 'os'
 import OSC from 'osc'
 import { Bonjour } from '@julusian/bonjour-service'
+import { MittiDisplayServer } from './display-server.js'
 
 class MittiInstance extends InstanceBase {
 	constructor(internal) {
@@ -44,6 +46,8 @@ class MittiInstance extends InstanceBase {
 		} else {
 			this.updateStatus(InstanceStatus.BadConfig, 'Unable to determine IP Address')
 		}
+
+		this.initDisplayServer()
 	}
 
 	getConfigFields() {
@@ -84,6 +88,28 @@ class MittiInstance extends InstanceBase {
 				regex: Regex.PORT,
 			},
 			{
+				type: 'textinput',
+				id: 'displayPort',
+				label: 'Display Server Port',
+				width: 4,
+				tooltip:
+					'HTTP+WS port that serves the browser display component (/mitti-display.js) and pushes playback state to subscribers.',
+				default: 4666,
+				regex: Regex.PORT,
+			},
+			{
+				type: 'static-text',
+				id: 'displayUrls',
+				width: 12,
+				label: 'Display Server URLs',
+				value:
+					'Open the browser playback display at one of these addresses:<br>' +
+					this._getDisplayServerUrls()
+						.map((url) => `<a href="${url}" target="_blank">${url}</a>`)
+						.join('<br>') +
+					'<br><i>Reopen this dialog after changing the port to refresh these links.</i>',
+			},
+			{
 				type: 'checkbox',
 				id: 'feedbackAlert',
 				label: 'Feedback Alert',
@@ -108,6 +134,8 @@ class MittiInstance extends InstanceBase {
 		} else {
 			this.updateStatus(InstanceStatus.BadConfig, 'Unable to determine IP Address')
 		}
+
+		this.initDisplayServer()
 	}
 
 	async destroy() {
@@ -118,12 +146,119 @@ class MittiInstance extends InstanceBase {
 		this.stopTestService()
 		this.stopBonjourService()
 
+		if (this._displayHeartbeat) {
+			clearInterval(this._displayHeartbeat)
+			this._displayHeartbeat = null
+		}
+
 		if (this._cacheRefreshTimer) {
 			clearTimeout(this._cacheRefreshTimer)
 			this._cacheRefreshTimer = null
 		}
 
+		if (this.displayServer) {
+			this.displayServer.close()
+			this.displayServer = null
+		}
+
 		this.cues = {}
+	}
+
+	initDisplayServer() {
+		if (this.displayServer) {
+			this.displayServer.close()
+			this.displayServer = null
+		}
+		const displayPort = isNaN(parseInt(this.config.displayPort)) ? 4666 : parseInt(this.config.displayPort)
+		this.displayServer = new MittiDisplayServer(displayPort, (level, msg) => this.log(level, msg))
+		this.displayServer.setState(this._buildDisplayState())
+
+		// Heartbeat so the elapsed-freshness check can flip playing→false even when
+		// Mitti goes quiet (pause/stop without a togglePlay 0 message).
+		if (this._displayHeartbeat) clearInterval(this._displayHeartbeat)
+		this._displayHeartbeat = setInterval(() => this._broadcastDisplayState(), 1000)
+	}
+
+	// Enumerate the URLs the display server is reachable at: loopback plus every
+	// non-internal IPv4 address of this host. The server binds all interfaces, so
+	// any of these will work from a browser on the same network.
+	_getDisplayServerUrls() {
+		const parsed = parseInt(this.config?.displayPort)
+		const port = isNaN(parsed) ? 4666 : parsed
+		const hosts = ['localhost', '127.0.0.1']
+		try {
+			for (const addrs of Object.values(os.networkInterfaces())) {
+				for (const addr of addrs ?? []) {
+					const isIPv4 = addr.family === 'IPv4' || addr.family === 4
+					if (isIPv4 && !addr.internal) hosts.push(addr.address)
+				}
+			}
+		} catch {
+			// ignore — the loopback entries are still useful on their own
+		}
+		return hosts.map((host) => `http://${host}:${port}`)
+	}
+
+	_buildDisplayState() {
+		const elapsedFresh = this.states.lastElapsedAt > 0 && Date.now() - this.states.lastElapsedAt < 1500
+		const playing =
+			this.states.playing === 'Playing' &&
+			this.states.currentCueName &&
+			this.states.currentCueName !== '-' &&
+			elapsedFresh &&
+			(this.states.elapsedSec ?? 0) > 0
+
+		// Pull cached attributes for the cue at the given slot (selected / next).
+		// Returns nulls when no entry is cached yet (cold start) — the consumer
+		// can render a placeholder.
+		const onDeck = (name) => {
+			if (!name || name === '-') {
+				return { name: null, duration: null, loop: null, pauseAtEnd: null, audio: null }
+			}
+			const cached = this.cueCache[name]
+			return {
+				name,
+				duration: cached?.trtSec ?? null,
+				loop: cached?.loop ?? null,
+				pauseAtEnd: cached?.pauseAtEnd ?? null,
+				audio: cached?.audio ?? null,
+			}
+		}
+		const sel = onDeck(this.states.selectedCueName)
+		const nxt = onDeck(this.states.nextCueName)
+
+		// Current clip's toggle state — sourced from the same name-keyed cache
+		// since it gets populated for whatever cue is currently playing. Lets
+		// the display widget render matching loop / pause-end / audio icons
+		// next to the live countdown when we add that UI.
+		const cur = playing ? (this.cueCache[this.states.currentCueName] ?? null) : null
+
+		return {
+			playing: !!playing,
+			clipName: playing ? this.states.currentCueName : null,
+			elapsed: playing ? (this.states.elapsedSec ?? 0) : 0,
+			duration: playing ? (this.states.durationSec ?? 0) : 0,
+			remaining: playing ? (this.states.remainingSec ?? 0) : 0,
+			currentClipLoop: cur?.loop ?? null,
+			currentClipPauseAtEnd: cur?.pauseAtEnd ?? null,
+			currentClipAudio: cur?.audio ?? null,
+			selectedClipName: sel.name,
+			selectedClipDuration: sel.duration,
+			selectedClipLoop: sel.loop,
+			selectedClipPauseAtEnd: sel.pauseAtEnd,
+			selectedClipAudio: sel.audio,
+			nextClipName: nxt.name,
+			nextClipDuration: nxt.duration,
+			nextClipLoop: nxt.loop,
+			nextClipPauseAtEnd: nxt.pauseAtEnd,
+			nextClipAudio: nxt.audio,
+		}
+	}
+
+	_broadcastDisplayState() {
+		if (this.displayServer) {
+			this.displayServer.setState(this._buildDisplayState())
+		}
 	}
 
 	// Ask Mitti to re-broadcast its full feedback state. Mitti sometimes lags
@@ -420,6 +555,7 @@ class MittiInstance extends InstanceBase {
 			nextCuePauseAtEnd: fmtFlag(nxt?.pauseAtEnd),
 			nextCueAudio: fmtAudio(nxt?.audio),
 		})
+		this._broadcastDisplayState()
 	}
 
 	async initOSC() {
@@ -628,10 +764,13 @@ class MittiInstance extends InstanceBase {
 				this.checkFeedbacks('playingCueName', 'playingCueID', 'activeCueName')
 				if (prevCueName !== undefined && prevCueName !== value) {
 					// Cue changed — the old clip's elapsed/duration belong to a different clip now.
+					// Clear them so playing computes false until the new clip's elapsed actually advances.
 					this.states.elapsedSec = 0
 					this.states.remainingSec = 0
 					this.states.durationSec = 0
+					this.states.lastElapsedAt = 0
 				}
+				this._broadcastDisplayState()
 				break
 			}
 			case 'currentCueID':
@@ -696,6 +835,7 @@ class MittiInstance extends InstanceBase {
 						this.states.remainingSec =
 							parseInt(cueTimeLeftHH) * 3600 + parseInt(cueTimeLeftMM) * 60 + parseInt(cueTimeLeftSS)
 						this.checkFeedbacks('timeRemaining')
+						this._broadcastDisplayState()
 
 						const atOutPoint =
 							cueTimeLeftHH === '00' && cueTimeLeftMM === '00' && cueTimeLeftSS === '00' && cueTimeLeftFF === '00'
@@ -739,6 +879,8 @@ class MittiInstance extends InstanceBase {
 						})
 						this.states.elapsedSec =
 							parseInt(cueTimeElapsedHH) * 3600 + parseInt(cueTimeElapsedMM) * 60 + parseInt(cueTimeElapsedSS)
+						this.states.lastElapsedAt = Date.now()
+						this._broadcastDisplayState()
 
 						const atInPoint =
 							cueTimeElapsedHH === '00' &&
@@ -776,6 +918,7 @@ class MittiInstance extends InstanceBase {
 							trtFull: cueTimeFull,
 							trtSec: this.states.durationSec,
 						})
+						this._broadcastDisplayState()
 					}
 				}
 				break
@@ -792,6 +935,7 @@ class MittiInstance extends InstanceBase {
 				if (this.states.playing === 'Playing' && !wasPlaying) {
 					this._requestResyncFromMitti()
 				}
+				this._broadcastDisplayState()
 				break
 			}
 			case 'playhead':
