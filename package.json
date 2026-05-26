@@ -20,8 +20,7 @@
 	"dependencies": {
 		"@companion-module/base": "~1.12.1",
 		"@julusian/bonjour-service": "^1.4.2",
-		"osc": "^2.4.5",
-		"ws": "^8.18.0"
+		"osc": "^2.4.5"
 	},
 	"devDependencies": {
 		"@companion-module/tools": "^2.6.1",
