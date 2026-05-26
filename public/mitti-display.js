@@ -56,14 +56,29 @@
 			'  flex-direction: column;',
 			'  gap: 0.5cqi;',
 			'}',
-			'.mvhud-mitti-display__clip-name {',
+			// Top row: clip name on the left, TRT label + time on the right.
+			// Same font size + color for everything on the row.
+			'.mvhud-mitti-display__header {',
+			'  display: flex;',
+			'  align-items: baseline;',
+			'  gap: 1cqi;',
 			'  font-size: 4cqi;',
 			'  font-weight: 600;',
+			'  color: #ddd;',
+			'  line-height: 1;',
+			'}',
+			'.mvhud-mitti-display__clip-name {',
+			'  flex: 1 1 auto;',
+			'  min-width: 0;',
 			'  white-space: nowrap;',
 			'  overflow: hidden;',
 			'  text-overflow: ellipsis;',
-			'  min-width: 0;',
-			'  color: #ddd;',
+			'}',
+			'.mvhud-mitti-display__header-trt {',
+			'  flex: 0 0 auto;',
+			'  display: flex;',
+			'  gap: 0.5cqi;',
+			'  white-space: nowrap;',
 			'}',
 			// `countdown-area` wraps the live countdown plus its overlay siblings:
 			// current-cue icons in the upper-right and the current-cue TRT in the
@@ -82,10 +97,12 @@
 			'}',
 			'.mvhud-mitti-display__current-icons {',
 			'  position: absolute;',
-			'  top: 0;',
+			'  top: 20px;',
 			'  right: 0;',
 			'  display: flex;',
-			'  gap: 20px;',
+			'  flex-direction: column;',
+			'  align-items: flex-end;',
+			'  gap: 1cqi;',
 			'}',
 			'.mvhud-mitti-display__current-icon {',
 			'  width: 6cqi;',
@@ -97,26 +114,6 @@
 			'  -webkit-mask-size: contain;',
 			'  -webkit-mask-repeat: no-repeat;',
 			'  -webkit-mask-position: center;',
-			'}',
-			'.mvhud-mitti-display__current-trt {',
-			'  position: absolute;',
-			'  bottom: 0;',
-			'  right: 0;',
-			'  display: flex;',
-			'  align-items: baseline;',
-			'  gap: 0.5cqi;',
-			"  font-family: 'Lekton-Bold', monospace;",
-			'  color: #0af;',
-			'}',
-			'.mvhud-mitti-display__current-trt__label {',
-			// 0.8 × the time font size (6cqi), per spec
-			'  font-size: 4.8cqi;',
-			'  line-height: 1;',
-			'}',
-			'.mvhud-mitti-display__current-trt__time {',
-			// 1/3 of the countdown font size (18cqi), per spec
-			'  font-size: 6cqi;',
-			'  line-height: 1;',
 			'}',
 			// Shared mask-image declarations so both on-deck and current icon
 			// classes pick them up via their --modifier suffixes. Color comes
@@ -169,7 +166,7 @@
 			'  white-space: nowrap;',
 			'  min-width: 0;',
 			'}',
-			'.mvhud-mitti-display__on-deck__label { flex: 0 0 auto; }',
+			'.mvhud-mitti-display__on-deck__label { flex: 0 0 auto; color: #777; }',
 			'.mvhud-mitti-display__on-deck__name {',
 			'  flex: 1 1 auto;',
 			'  min-width: 0;',
@@ -217,10 +214,28 @@
 		var playback = document.createElement('div')
 		playback.className = 'mvhud-mitti-display__playback'
 
+		var header = document.createElement('div')
+		header.className = 'mvhud-mitti-display__header'
+
 		var clipName = document.createElement('div')
 		clipName.className = 'mvhud-mitti-display__clip-name'
-		playback.appendChild(clipName)
+		header.appendChild(clipName)
 		this.elements.clipName = clipName
+
+		var headerTRT = document.createElement('div')
+		headerTRT.className = 'mvhud-mitti-display__header-trt'
+
+		var headerTRTLabel = document.createElement('span')
+		headerTRTLabel.textContent = 'TRT:'
+		headerTRT.appendChild(headerTRTLabel)
+
+		var currentTRTTime = document.createElement('span')
+		headerTRT.appendChild(currentTRTTime)
+		this.elements.currentTRTTime = currentTRTTime
+		this.elements.currentTRT = headerTRT
+
+		header.appendChild(headerTRT)
+		playback.appendChild(header)
 
 		var countdownArea = document.createElement('div')
 		countdownArea.className = 'mvhud-mitti-display__countdown-area'
@@ -242,25 +257,9 @@
 
 		var countdown = document.createElement('div')
 		countdown.className = 'mvhud-mitti-display__countdown'
-		countdown.textContent = '0:00'
+		countdown.textContent = '-0:00'
 		countdownArea.appendChild(countdown)
 		this.elements.countdown = countdown
-
-		var currentTRT = document.createElement('div')
-		currentTRT.className = 'mvhud-mitti-display__current-trt'
-
-		var currentTRTLabel = document.createElement('span')
-		currentTRTLabel.className = 'mvhud-mitti-display__current-trt__label'
-		currentTRTLabel.textContent = 'TRT:'
-		currentTRT.appendChild(currentTRTLabel)
-
-		var currentTRTTime = document.createElement('span')
-		currentTRTTime.className = 'mvhud-mitti-display__current-trt__time'
-		currentTRT.appendChild(currentTRTTime)
-		this.elements.currentTRTTime = currentTRTTime
-
-		countdownArea.appendChild(currentTRT)
-		this.elements.currentTRT = currentTRT
 
 		playback.appendChild(countdownArea)
 
@@ -394,7 +393,8 @@
 			this.elements.idle.style.display = 'none'
 
 			this.elements.clipName.textContent = data.clipName || ''
-			this.elements.countdown.textContent = this._formatTime(data.remaining)
+			// Prefix with "-" so the countdown reads as time remaining (e.g. "-1:23").
+			this.elements.countdown.textContent = '-' + this._formatTime(data.remaining)
 
 			var duration = data.duration || 0
 			var elapsed = data.elapsed || 0

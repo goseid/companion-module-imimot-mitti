@@ -82,6 +82,11 @@ This branch adds the display server and HUD widget on top of v3.11.0. The featur
   - Display widget no longer shows "idle" when a clip is paused at its out point. New `hasCue` field in the WebSocket state controls the widget's playback-vs-idle gate based on whether a cue is loaded on Mitti's output, separate from the `playing` field's "actively playing with fresh timer" semantic.
   - Display widget no longer flashes "idle" for a frame at loop boundaries. Removed the `elapsedSec > 0` gate from the `playing` calculation — the `elapsedFresh` check still catches stale-after-stop cases.
   - Progress bar computes against `(duration - 1)` so it reaches full at the 1-second-remaining mark and stays full through `0:00`. Previously the bar could either fall short at `0:00` (sub-second / frame-level time the integer-second `elapsed` / `duration` can't see) or lunge the last second's worth all at once.
+- Layout
+  - Countdown is prefixed with `-` to read as time remaining (e.g. `-1:23`).
+  - Current cue's `TRT: m:ss` moved up alongside the clip name, sharing its font size and color so the top row reads as one line.
+  - Current cue state icons (audio + loop/pause-at-end) stack vertically in the upper-right (audio above) with a 20 px top offset from the countdown area.
+  - On-deck row's `on deck:` label dimmed to `#777` so the cue name reads as the primary content.
 
 ### v3.11.0
 
