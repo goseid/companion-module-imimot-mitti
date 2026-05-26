@@ -22,6 +22,7 @@ const STATIC_ROUTES = {
 	'/icons/looping.svg': { file: 'icons/looping.svg', contentType: 'image/svg+xml' },
 	'/icons/pause-end.svg': { file: 'icons/pause-end.svg', contentType: 'image/svg+xml' },
 	'/icons/audio.svg': { file: 'icons/audio.svg', contentType: 'image/svg+xml' },
+	'/favicon.ico': { file: 'favicon.ico', contentType: 'image/x-icon', binary: true },
 }
 
 export class MittiDisplayServer {
